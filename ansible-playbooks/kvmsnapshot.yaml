@@ -1,0 +1,60 @@
+---
+  - name: "Creating an snapshot"
+    hosts: "{{ hosts }}"
+    become: true
+    tasks:
+
+    - name: snapshot vm list file creation
+      script: /opt/ansible/snapshotlist.sh
+      register: vmlist
+     
+    - debug: var=vmlist.stdout_lines
+
+    - name: " Running VM's "
+      virt:
+        command: list_vms
+        state: running
+      register: running_vms
+
+    - name: "List of running vm's"
+      debug:
+         msg: "{{ running_vms}}"
+
+    - name: "Shutdown running vm's "
+      virt:
+        name: "{{ item }}"
+        state: shutdown
+      loop: "{{ running_vms.list_vms }}"
+
+    - name: "Sleep for 60 seconds and continue with play"
+      wait_for:
+        timeout: 60
+      delegate_to: localhost
+
+    - name: "Force Shutdown VM's that are not shutting down"
+      virt:
+        name: "{{ item }}"
+        state: destroyed
+      loop: "{{ running_vms.list_vms }}"
+
+    - name: "Sleep for 30 seconds and continue with play"
+      wait_for:
+        timeout: 30
+      delegate_to: localhost
+
+    - name: Create snapshots
+      script: /opt/ansible/snapshot.sh
+      register: snapshot
+      
+    - debug: var=snapshot.stdout_lines
+
+    - name: remove service list file from tmp
+      file:
+        path: /tmp/vmlist.txt
+        state: absent
+   
+    - name: "Start VM's backup"
+      virt:
+        name: "{{ item }}"
+        state: running
+      loop: "{{ running_vms.list_vms }}"
