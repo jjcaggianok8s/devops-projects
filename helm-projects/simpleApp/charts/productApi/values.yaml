@@ -1,0 +1,216 @@
+### Namespace ###
+namespace: default
+
+### Service Account ###
+serviceAccount:
+  metadata:
+    name: product-api
+  automountServiceAccountToken: true
+
+### Service Defaults ###
+serviceDefaults:
+  metadata:
+    name: product-api
+  spec:
+    protocol: http
+
+### Service ###
+service:
+  metadata:
+    name: product-api
+    labels:
+      app: product-api
+  spec:
+    type: ClusterIP
+    ports:
+      - port: 9090
+        targetPort: 9090
+        protocol: TCP
+### You can add multiple ports if you like just do so in the following way 
+#     - port: 443
+#       target: 443
+#       protocol
+
+### Config Map ### 
+configmap:
+  metadata:
+    name: db-configmap
+
+### Service Intentions ###
+serviceIntentions:
+  metadata:
+    name: public-api-to-product-api
+  spec:
+    destination:
+      name: product-api
+    sources:
+    - name: public-api
+      action: allow
+#      permissions:
+#      - action: allow
+#        http:
+#          pathExact: "/health"
+#      - action: allow
+#        http:
+#          pathPrefix: "/"
+#          methods:
+#          - GET
+#          - PUT
+#          - POST
+#          - DELETE
+#          header:
+#          - name: "Authorization"
+#            present: true
+#      - action: allow
+#        http:
+#          pathPrefix: "/"
+
+### Deployment ###
+deployment:
+  metadata:
+    name: product-api
+    labels:
+      app: product-api
+  spec:
+    replicaCount: 1
+    selector:
+      matchLabels:
+        service: product-api
+        app: product-api
+    template:
+      metadata:
+        labels:
+          service: product-api
+          app: product-api
+### enables annotations section ###
+        annotationenable: enabled
+### set to enabled if you want it to add the annotation section ###
+        annotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/port: "9102"
+          consul.hashicorp.com/connect-inject: "true"
+      spec:
+### enables securityContext section ###
+#       securityContextenabled: enabled
+### set to enabled if you want it to add the securityContext section and uncomment section and place in values ###
+#       securityContext:
+#         runAsGroup: 1000
+#         runAsUser: 1000
+### enable imagePullSecrets ###
+#       imagePullSecretsenabled: enabled
+### set to enabled if you want it to add the imagePullSecrets section uncomment section and place in values ### 
+#       imagePullSecrets:
+#       - name: "josh secret"
+### enables use of Volume ###
+        volumesenabled: enabled
+### set to enabled if you want it to add the Volumes section and uncomment section and place in values you want ### 
+### You also have the ability to add multiple volumes by copy and pasting the existing settings below the end of the first volume section
+####### add information under volues or enable configmap
+        volumes:
+        - name: config
+### enabled config map section
+          configMapEnabled: enabled
+          configMap:
+            name: db-configmap
+            items:
+            - key: conf.json
+              path: conf.json
+        containers:
+### You have the ability to add multiple containers if wanted just copy and past the values starting with -name below that ending of the first container###
+          - name: product-api
+            image: hashicorpdemoapp/product-api:v0.0.17
+            ports:
+### You have the ability to add more than one port if needed copy and past the new port inform below the existing and change the values
+#              - name: "postgres"
+              - containerPort: 9090
+              - containerPort: 9103
+### enabled env section of deployment with the uncommenting envEnabled the helm template well loop through env values
+            envEnabled: enabled
+### example
+            env:
+              - name: "CONFIG_FILE"
+                value: "/config/conf.json"
+### Enabled args section ####
+#            argsEnabled: enabled
+### to added args section uncomment and enter values needed
+### example:
+#            args: ["-c", "listen_addresses=127.0.0.1"]
+### You if you have a volumeMount make sure volumeMountsenabled is uncommented. If you do not have a volumeMount please comment volumeMountsenabled
+            volumeMountsenabled: enabled
+            volumeMounts:
+### You have the ability to add more than one volumeMount if needed copy and past the new volumeMount inform below the existing and change the values
+              - name: config
+                mountPath: /config
+                readOnly: true
+### enables use of resources ###
+#            resourcesEnabled: enabled
+### set to enabled if you want it to add the resources section and uncomment section and place in values ###
+# example below
+#            resources:
+#              requests:
+#                memory: "128Mi"
+#                cpu: "100m"
+#              limits:
+#                memory: "256Mi"
+#                cpu: "200m"
+### enables use of readinessProd ###
+#            readinessProbeEnabled: enabled
+### set to enabled if you want it to add the readinessProbe section and uncomment section and place in values ###
+# example below
+#            readinessProbe:
+#              initialDelaySeconds: 10
+#              httpGet:
+#                port: flask
+#                path: /
+### enables use of livinessProbe:
+            livenessProbeEnabled: enabled
+### set to enabled if you want it to add the livinessProbe section and uncomment section and place in values ###
+# example below
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 9090
+              initialDelaySeconds: 115
+              timeoutSeconds: 1
+              periodSeconds: 10
+              failureThreshold: 30
+### enables use of container securityContext:
+#            securityContextContainerEnabled: enabled
+### set to enabled if you want it to add the container securityContext section and uncomment section and place in values ###
+# example below
+#            securityContext:
+#              allowPrivilegeEscalation: false
+#              readOnlyRootFilesystem: true
+#              capabilities:
+#                drop:
+#                  - all
+#                add:
+#                  - NET_BIND_SERVICE
+
+#### Ingress ###
+#ingress:
+#  metadata:
+#    name: alb-gateway
+### Enabled annotation section ###
+#    annotationEnabled: enabled
+### set to enabled if you want it to add the Annotation section and uncomment section and place in values ###
+### example
+#    annotations:
+#      alb.ingress.kubernetes.io/scheme: internal
+#      alb.ingress.kubernetes.io/target-type: ip
+#      alb.ingress.kubernetes.io/load-balancer-name: test-alb-dev
+#      alb.ingress.kubernetes.io/tags: Environment=dev,TechContact=michael.melton@kinsaleins.com,Owner=michael.melton@kinsaleins.com,Application=EKSIngress,Component=ALB
+#      alb.ingress.kubernetes.io/inbound-cidrs: 10.0.0.0/8, 172.16.8.0/22
+#  spec:
+#    ingressClassName: alb
+#    rules:
+#   - host: "kinsale.com"
+#    - http:
+#        paths:
+#        - path: /
+#          pathType: Prefix
+#          backend:
+#            service:
+#              name: frontend
+#              port:
+#                number: 80

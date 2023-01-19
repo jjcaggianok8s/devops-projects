@@ -1,0 +1,7 @@
+{{- include "helmlibrary.serviceDefaults" . }}
+---
+{{- include "helmlibrary.serviceAccount" . }}
+---
+{{- include "helmlibrary.service" . }}
+---
+{{- include "helmlibrary.deployment" . }}

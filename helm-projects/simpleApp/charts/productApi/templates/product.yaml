@@ -1,0 +1,11 @@
+{{- include "helmlibrary.serviceDefaults" . }}
+---
+{{- include "helmlibrary.serviceAccount" . }}
+---
+{{- include "helmlibrary.service" . }}
+---
+{{- include "helmlibrary.serviceIntentions" . }}
+---
+{{- include "helmlibrary.configmap" . }}
+---
+{{- include "helmlibrary.deployment" . }}

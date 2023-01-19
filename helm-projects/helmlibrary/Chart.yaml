@@ -1,0 +1,8 @@
+apiVersion: v2
+description: A Helm library for EKS Apps for
+maintainers:
+- email: example@gmail.com
+  name: jcaggiano
+name: helmlibrary
+type: library
+version: 1.0.0
