@@ -1,0 +1,97 @@
+---
+  - name: "Patching Ansible Servers"
+    hosts: "{{ hosts }}"
+    become: true
+    vars:
+       local_dir: "/tmp/ansible/syspatching"
+       newline_character: "\n"
+       services_running: []
+       services_NOT_running: []
+    tasks:
+
+### Set Patching time ###
+    - name: "set patching_time"
+      set_fact:
+        timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+      delegate_to: localhost
+      run_once: true
+
+### Collect information about Servers ####
+### System Distribution and Version ####
+    - name: set pre update os_info
+      set_fact:
+        os_info_pre_update:
+          distribution: "{{ ansible_distribution }}"
+          distribution_major_version: "{{ ansible_distribution_major_version }}"
+          distribution_release: "{{ ansible_distribution_release }}"
+          distribution_version: "{{ ansible_distribution_version }}"
+    
+    - name: "current OS version information before the update"
+      blockinfile:
+        block:  |
+          "HOSTNAME: {{ inventory_hostname }} version before the update:"
+          "      distribution: {{ os_info_pre_update.distribution  }} "
+          "      distribution_major_version: {{ os_info_pre_update.distribution_major_version }}"
+          "      distribution_release: {{ os_info_pre_update.distribution_release }}"
+          "      distribution_version: {{ os_info_pre_update.distribution_version }}"
+        dest: "{{ local_dir }}/update.{{ inventory_hostname }}.OK.{{ timestamp }}"
+        create: yes
+        marker: " "
+      delegate_to: localhost
+
+#### Getting status of Services and list of Mounted devices ####
+    - name: "populate service facts"
+      service_facts:
+    
+    - name: "populate running services"
+      set_fact:
+        services_running: "{{ ansible_facts | json_query('services.* | [?state == `running`].name')}}"
+
+    - name: "Collect a list of the mounted device"
+      set_fact:
+        dvs: "{{ ansible_mounts | map(attribute='device') | list }}"
+
+    - name: "Current Services Running and Not Running"
+      blockinfile:
+        block: |
+          "{{ services_running }}"
+        dest: "{{ local_dir }}/prepatchrunningservices.{{ inventory_hostname }}.{{ timestamp }}"
+        create: yes
+        marker: " "
+      delegate_to: localhost
+
+    - name: "Current mounted and mapped volumes"
+      blockinfile:
+        block: |
+          "{{ dvs }}"
+        dest: "{{ local_dir }}/prepatchmounts.{{ inventory_hostname }}.{{ timestamp }}"
+        create: yes
+        marker: " "
+      delegate_to: localhost
+
+#### Patch server and reboot
+
+    - name: "Running yum command"
+      yum:
+        name: "*"
+        state: latest
+        exclude: java*, smb*, php*, tomcat*, gitlab*
+        disable_gpg_check: yes
+        skip_broken: yes
+      register: yum_result
+    
+    - name: "Reboot the machine and (Wait for 3 min )"
+      reboot:
+        reboot_timeout: 180
+
+
+### Post patch check
+
+    - name: "After Reboot running services"
+      blockinfile:
+        block: |
+          "{{ services_running }}"
+        dest: "{{ local_dir }}/postpatchrunningservices.{{ inventory_hostname }}.{{ timestamp }}"
+        create: yes
+        marker: " "
+      delegate_to: localhost  
