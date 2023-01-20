@@ -3,7 +3,7 @@
 cluster-version = "1.22"
 
 eks-cluster-tags = {
-    TechContact = "dl_cloudengineering@kinsaleins.com"
+    TechContact = "example@gmail.com"
     Application = "eks_cluster"
     Component = "eks_cluster"
     Environment = "qa"
@@ -14,25 +14,25 @@ eks-cluster-name = "eks-cluster-qa"
 ### IAM Backend ###
 
 iam-data-region = "us-east-1"
-iam-data-bucket = "kinsale-terraform-state-qa"
+iam-data-bucket = "terraform-state-qa"
 iam-data-key    = "qa/infra/iam.tfstate"
 
 ### EKS Security Group ###
 
-sg_default = "kinsaleDefaultSecurityGroups-defaultSgId"
+sg_default = "SecurityGroups-defaultSgId"
 
-sg_second = "kinsaleDefaultSecurityGroups-appSgId"
+sg_second = "SecurityGroups-appSgId"
 
 sg-name = "eks_sg_qa"
 
-vpc_id = "vpc-0b037b89bc050358b"
+vpc_id = "vpc-number"
 
 cidr_blocks = "10.0.0.0/8"
 
 cidr_blocks_2 = "172.16.0.0/16"
 
 eks-sg-tags = {
-        TechContact = "dl_cloudengineering@kinsaleins.com"
+        TechContact = "example@gmail.com"
         Application = "eks_sg"
         Component = "eks_sg"
         Environment = "qa"
@@ -41,7 +41,7 @@ eks-sg-tags = {
 ### Node Group One Values ###
 
 eks-nodegroup-tags = {
-        TechContact = "dl_cloudengineering@kinsaleins.com"
+        TechContact = "example@gmail.com"
         Application = "eks_nodegroup"
         Component = "eks_nodegroup"
         Environment = "qa"    
@@ -78,7 +78,7 @@ eks_cibr_block_rt02 = "0.0.0.0/0"
 eks_vgw_id = "vgw-07f320a1394e25946"
 
 eks_network_tags = {
-        TechContact = "dl_cloudengineering@kinsaleins.com"
+        TechContact = "example@gmail.com"
         Application = "eks_network"
         Component = "eks_network "
         Environment = "qa"    
