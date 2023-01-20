@@ -1,0 +1,401 @@
+include:
+  # Helm template
+  - project: 'to-be-continuous/helm'
+    ref: "3.0.0"
+    file: '/templates/gitlab-ci-helm.yml'
+
+default:
+  image: 
+    name: alpine/helm:latest
+
+variables:
+  VERSION: "0.0.1"
+  IMAGENAME: "Name"
+  HELM_CLI_IMAGE: "alpine/helm:latest"
+  HELM_REPO_USER: ${username}
+  HELM_REPO_PASSWORD: ${nexustoken}
+  HELM_REVIEW_DISABLED: "true"
+  HELM_INTEG_DISABLED: "true"
+  HELM_STAGING_DISABLED: "true"
+  HELM_PROD_DISABLED: "true"
+  HELM_LINT_DISABLED: "true"
+  HELM_YAMLLINT_DISABLED: "true"
+  HELM_KUBE_SCORE_DISABLED: "true"
+  HELM_REPO_PUBLISH_METHOD: "POST"
+  HELM_PUBLISH_URL: https://nexus.itp.example.cloud/repository/helm-releases/
+  HELM_PUBLISH_SNAPSHOT_URL: https://nexus.itp.example.cloud/repository/helm-snapshots/
+  SEMREL_INFO_ON: "prod"
+  REGION: "us-east-1"
+  SEMREL_TAG_FORMAT: "helm-library-$${version}"
+  SEMREL_CHANGELOG_ENABLED: "true"
+  SEMREL_CHANGELOG_FILE: "CHANGELOG.md"
+  SEMREL_CHANGELOG_TITLE: "# Kinsale Helm Library Changelog"
+  SEMREL_RELEASE_DISABLED: "false"
+
+# Dev variables
+.dev_variables: &dev_variables
+  HELM_ENV_VALUE_NAME: "dev"
+  SPRING_PROFILES_ACTIVE: 'dev\,eks-vault'
+  EKS_CLUSTER: "eks-cluster-dev"
+  SERVICE_ROLE: "arn#"
+
+# QA variables
+.qa_variables: &qa_variables
+  HELM_ENV_VALUE_NAME: "qa"
+  SPRING_PROFILES_ACTIVE: 'qa\,eks-vault'
+  EKS_CLUSTER: "eks-cluster-qa"
+  SERVICE_ROLE: "arn#"
+
+
+#Stage variables
+.stage_variables: &stage_variables
+  HELM_ENV_VALUE_NAME: "stage"
+  SPRING_PROFILES_ACTIVE: 'stage\,eks-vault'
+  EKS_CLUSTER: "eks-cluster-stage"
+  SERVICE_ROLE: "arn#"
+
+#Prod variables
+.prod_variables: &prod_variables
+  HELM_ENV_VALUE_NAME: "prod"
+  SPRING_PROFILES_ACTIVE: 'prod\,eks-vault'
+  EKS_CLUSTER: "eks-cluster-prod"
+  SERVICE_ROLE: "arn#"
+
+# ===================================================
+# Pipeline Scripts
+# ===================================================
+
+# Deploy script:
+.auth: &auth
+  before_script:
+    - apk add --no-cache python3 py-pip bash jq curl
+    - pip3 install awscli
+    - echo "Validate AWS CLI Installed"
+    - aws --version
+    - source ./assume-role.sh "${REGION}" "${CI_COMMIT_TAG}" "${SERVICE_ROLE}" 
+    - aws sts get-caller-identity
+    - aws eks update-kubeconfig --region us-east-1 --name ${EKS_CLUSTER}
+    - helm repo add helm-snapshots $HELM_PUBLISH_SNAPSHOT_URL --username $HELM_REPO_USER  --password $HELM_REPO_PASSWORD
+    - helm repo add helm-releases $HELM_PUBLISH_URL --username $HELM_REPO_USER --password $HELM_REPO_PASSWORD
+
+# Validation Helm Chart
+.chart-validation: &chart_validation
+  script:
+    - helm template $HELM_BASE_APP_NAME $HELM_CHART_DIR
+
+# Installs Helm in Production from release chart in Nexus Repo
+.releasesdeploy: &releasesdeploy
+  script:
+    - helm dependency update $HELM_CHART_DIR
+    - CHART=$(git describe --tags --abbrev=0)
+    - echo "Deploying ${chart} to ${HELM_ENV_VALUE_NAME}"
+    - helm upgrade --install $HELM_BASE_APP_NAME helm-releases/$CHART -n $HELM_NAMESPACE --clean-on-fail
+
+# Installs help from helm chart in pipeline 
+.testdeploy: &testdeploy
+  script:
+    - helm dependency update $HELM_CHART_DIR
+    - export VERSION=$(cat pom.xml | grep "<version>" | head -1 | cut -d">" -f2 | cut -d"<" -f1)
+    - DOCKERIMAGE=docker.itp.example.cloud/${HELM_BASE_APP_NAME}/snapshot:${CI_COMMIT_SHORT_SHA}
+    - echo $DOCKERIMAGE
+    - APPNAME=$(echo $HELM_VALUE_NAME)
+    - helm upgrade --install $HELM_BASE_APP_NAME $HELM_CHART_DIR -n $HELM_NAMESPACE
+      --set global.image=$DOCKERIMAGE
+      --set global.serviceAccount.name=$APPNAME
+      --set global.serviceDefaults.name=$APPNAME
+      --set global.service.name=$APPNAME
+      --set global.deployment.name=$APPNAME
+      --set global.envValue=$SPRING_PROFILES_ACTIVE
+      --cleanup-on-fail
+
+# Install and rollback validation
+.rollback-validation: &rollback_validation
+  script:
+    - helm dependency update $HELM_CHART_DIR
+    - export VERSION=$(cat pom.xml | grep "<version>" | head -1 | cut -d">" -f2 | cut -d"<" -f1)
+    - DOCKERIMAGE=$(echo $IMAGENAME$VERSION)
+    - echo $DOCKERIMAGE
+    - APPNAME=$(echo $HELM_VALUE_NAME)
+    - helm upgrade --install $HELM_BASE_APP_NAME $HELM_CHART_DIR -n $HELM_NAMESPACE
+      --set global.image=$DOCKERIMAGE
+      --set global.serviceAccount.name=$APPNAME
+      --set global.serviceDefaults.name=$APPNAME
+      --set global.service.name=$APPNAME
+      --set global.deployment.name=$APPNAME
+      --set global.envValue=$SPRING_PROFILES_ACTIVE
+      --cleanup-on-fail
+    - helm rollback $HELM_BASE_APP_NAME -n $HELM_NAMESPACE
+
+# Roll back script
+.rollback: &rollback
+  script:
+    - helm rollback $HELM_BASE_APP_NAME -n $HELM_NAMESPACE
+
+.approval: &approval
+  script:
+    - echo "===== Change Control Approved by all required users ====="
+
+# ===================================================
+# Pipeline stages
+# ===================================================
+stages:
+  - build
+  - test
+  - package-build
+  - package-test
+  - infra
+  - chart-validation
+  - deploy
+  - deploy-qa
+  - stage-approval
+  - publish
+  - deploy-stage
+  - acceptance
+  - prod-approval
+  - production
+
+
+# ==================================================
+#  Pipeline Validation 
+# ==================================================
+
+helm-validation:
+  stage: chart-validation
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  <<: *chart_validation
+  needs: ['mvn-build', 'mvn-sonar', 'unified-mend-job']
+  allow_failure: false
+
+# ===================================================
+# Pipeline Packaging into snapshots
+# ===================================================
+
+helm-package:
+  script:
+    - helm repo add helm-snapshots $HELM_PUBLISH_SNAPSHOT_URL --username $HELM_REPO_USER --password $HELM_REPO_PASSWORD
+    - |    
+      if [[ "$SEMREL_INFO_ON" ]] && [[ "$SEMREL_INFO_NEXT_VERSION" ]] && [[ "$HELM_SEMREL_RELEASE_DISABLED" != "true" ]]
+      then
+        log_info "semantic-release info is activated, using computed next version for release: \\e[1;94m${SEMREL_INFO_NEXT_VERSION}\\e[0m"
+        helm_version_opts="--app-version ${SEMREL_INFO_NEXT_VERSION} --version ${SEMREL_INFO_NEXT_VERSION}"
+      fi
+    - helm $HELM_PACKAGE_ARGS ${TRACE+--debug} $helm_version_opts $HELM_CHART_DIR --destination helm_packages
+    - |
+      package=$(ls -1 ./helm_packages/*.tgz 2>/dev/null || echo "")
+      if [ -n "$HELM_PUBLISH_SNAPSHOT_URL" ] && [ -n "${package}" ]
+      then
+        package_file=$(basename ${package})
+        log_info "publishing helm chart ${package_file} to snapshot url: ${HELM_PUBLISH_SNAPSHOT_URL}"
+        username="${HELM_REPO_SNAPSHOT_USER:-${HELM_REPO_USER:-$CI_REGISTRY_USER}}"
+        password="${HELM_REPO_SNAPSHOT_PASSWORD:-${HELM_REPO_PASSWORD:-$CI_REGISTRY_PASSWORD}}"
+        method="${HELM_REPO_SNAPSHOT_PUBLISH_METHOD:-$HELM_REPO_PUBLISH_METHOD}"
+        if [[ "$method" == "POST" ]]
+        then
+          maybe_install_curl
+          curl --fail --user "$username:$password" $HELM_PUBLISH_SNAPSHOT_URL --upload-file ${package}
+        else
+          wget -v --method=PUT --user="$username" --password="$password" --body-file="${package}" "$HELM_PUBLISH_SNAPSHOT_URL/${package_file}" -O -
+        fi
+      fi
+  needs: ['helm-validation', "mvn-snapshot"]
+
+# ===================================================
+# Pipeline Deploying in Test Environment
+# ===================================================
+
+dev-deploy:
+  stage: deploy
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  variables:
+    <<: *dev_variables
+  extends: 
+    - .auth
+  when: manual
+  needs: ['mvn-build']
+  <<: *testdeploy
+
+qa-deploy:
+  stage: deploy-qa
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  variables:
+    <<: *qa_variables
+  extends: 
+    - .auth
+  when: manual
+  needs: ['dev-deploy']
+  <<: *testdeploy
+
+stage-approval:
+  stage: stage-approval
+  environment: stage-approval
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  <<: *approval
+  allow_failure: false
+
+stage-rollback-validation:
+  stage: deploy-stage
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+  variables:
+    <<: *stage_variables
+  extends: 
+    - .auth
+  allow_failure: false
+  when: manual
+  needs: ['stage-approval']
+  <<: *rollback_validation
+
+stage-deploy:
+  stage: deploy-stage
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+  variables:
+    <<: *stage_variables
+  extends: 
+    - .auth
+  when: manual
+  allow_failure: false
+  needs: ['stage-approval', 'stage-rollback-validation']
+  <<: *testdeploy
+
+# ===================================================
+# Pipeline Rollback in case of failing Deployment
+# ===================================================
+
+dev-rollback:
+  stage: deploy
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  variables:
+    <<: *dev_variables
+  extends: 
+    - .auth
+  when: manual
+  needs: ['dev-deploy']
+  <<: *rollback
+
+qa-rollback:
+  stage: deploy-qa
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  variables:
+    <<: *qa_variables
+  extends: 
+    - .auth
+  when: manual
+  needs: ['qa-deploy']
+  <<: *rollback
+
+stage-rollback:
+  stage: deploy-stage
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+  variables:
+    <<: *stage_variables
+  extends: 
+    - .auth
+  when: manual
+  needs: ['stage-deploy']
+  <<: *rollback
+
+# ==================================================
+# Stage: publish
+# ==================================================
+helm-publish:
+  script:
+    - |
+      package=$(ls -1 ./helm_packages/*.tgz 2>/dev/null || echo "")
+      if [ -n "$HELM_PUBLISH_URL" ] && [ -n "${package}" ]
+      then
+        package_file=$(basename ${package})
+        log_info "publishing helm chart ${package_file} to release url: ${HELM_PUBLISH_URL}"
+        username="${HELM_REPO_RELEASE_USER:-${HELM_REPO_USER:-$CI_REGISTRY_USER}}"
+        password="${HELM_REPO_RELEASE_PASSWORD:-${HELM_REPO_PASSWORD:-$CI_REGISTRY_PASSWORD}}"
+        method="${HELM_REPO_RELEASE_PUBLISH_METHOD:-$HELM_REPO_PUBLISH_METHOD}"
+        if [[ "$method" == "POST" ]]
+        then
+          maybe_install_curl
+          curl --fail --user "$username:$password" $HELM_PUBLISH_URL --upload-file ${package} -v
+        else
+          wget -v --method=PUT --user="$username" --password="$password" --body-file="${package}" "$HELM_PUBLISH_URL/${package_file}" -O -
+        fi
+      else
+        log_error "No Chart to deploy! url is: $HELM_PUBLISH_URL, and package found is: ${package}"
+      fi
+
+# ===================================================
+# Pipeline Production Deployment
+# ===================================================
+
+prod-approval:
+  stage: prod-approval
+  environment: prod-approval
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+  <<: *approval
+  allow_failure: false
+
+prod-deploy:
+  stage: production
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+  variables:
+    <<: *prod_variables
+  extends: 
+    - .auth
+  when: manual
+  needs: ['prod-approval']
+  <<: *releasesdeploy
+
+# ===================================================
+# Pipeline Production Rollback incase of Failure
+# ===================================================
+
+prod-rollback:
+  stage: production
+  image: 
+    name: alpine/helm:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
+  variables:
+    <<: *prod_variables
+  extends: 
+    - .auth
+  when: manual
+  needs: ['prod-deploy']
+  <<: *rollback
+
+
+

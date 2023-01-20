@@ -1,0 +1,197 @@
+efault:
+  image:
+    name: hashicorp/packer:latest
+    entrypoint: [""]
+  
+    
+variables:
+  ACCOUNTS_NP: "123456432345 345643456633"
+  REGION: "us-east-1"
+  CONTACT: "jjcaggiano1@liberty.edu"
+  CI_ROLE_NAME: PackerCICD-Pipeline
+  build_switch_nonprod: "enabled"
+  build_switch_prod: "enabled"
+  parm_switch_nonprod: "enabled"
+  parm_switch_prod: "enabled"
+
+stages: 
+  - validate
+  - build
+
+before_script:
+  - |
+    packer version
+    apk add jq
+    apk add curl
+    apk add sudo
+    apk add py3-pip
+    pip3 install awscli --upgrade
+    apk add gawk
+    apk add sed
+    apk add git --no-cache
+
+.validate-packer: &validate_packer
+  script:
+   - chmod 755 ./scripts/validate.sh
+   - ./scripts/validate.sh
+
+### NonProd AMI Build Script ####
+
+.build-script-nonprod: &build_script_nonprod
+  script:
+  - echo "Creating Golden Packer Build!"
+  - export AWS_DEFAULT_REGION=${REGION}
+  - export ACCOUNTS_NP_ARRAY=(${ACCOUNTS_NP})
+  - source ./assume-role.sh 
+  - export PACKER_LOG=1
+  - export PACKER_LOG_PATH="packerlog.txt"
+  - chmod 755 ./scripts/packerbuild.sh
+  - ./scripts/packerbuild.sh variables_golden.json ami_golden.json
+  - ./scripts/packerbuild.sh variables_silver.json ami_silver_tomcat.json
+  - ./scripts/packerbuild.sh variables_silver_external.json ami_silver_external_tomcat.json  
+  - AMI_ID_GOLDEN=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_GOLDEN}.json | cut -d ":" -f2)
+  - AMI_ID_SILVER=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_SILVER}.json | cut -d ":" -f2)
+  - AMI_ID_SILVER_EXTERNAL=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_SILVER_EXTERNAL}.json | cut -d ":" -f2)
+
+### Prod AMI Build Script ####
+
+.build-script-prod: &build_script_prod
+  script:
+  - echo "Creating Golden Packer Build!"
+  - export AWS_DEFAULT_REGION=${REGION}
+  - export ACCOUNTS_NP_ARRAY=(${ACCOUNTS_NP})
+  - source ./assume-role.sh 
+  - export PACKER_LOG=1
+  - export PACKER_LOG_PATH="packerlog.txt"
+  - chmod 755 ./scripts/packerbuild.sh
+  - ./scripts/packerbuild.sh prod_variables_golden.json ami_golden.json
+  - ./scripts/packerbuild.sh prod_variables_silver.json ami_silver_tomcat.json
+  - ./scripts/packerbuild.sh prod_variables_silver_external.json ami_silver_external_tomcat.json  
+  - AMI_ID_GOLDEN_PROD=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_GOLDEN_PROD}.json | cut -d ":" -f2)
+  - AMI_ID_SILVER_PROD=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_SILVER_PROD}.json | cut -d ":" -f2)
+  - AMI_ID_SILVER_EXTERNAL_PROD=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_SILVER_EXTERNAL_PROD}.json | cut -d ":" -f2)
+
+.parm-store-change-nonprod: &parm_store_change_nonprod
+  script:
+  - ls
+  - pwd
+  - export AWS_DEFAULT_REGION=${REGION}
+  - export ACCOUNTS_NP_ARRAY=(${ACCOUNTS_NP})
+  - source ./assume-role.sh 
+  - AMI_ID_GOLDEN=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_GOLDEN}.json | cut -d ":" -f2)
+  - AMI_ID_SILVER=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_SILVER}.json | cut -d ":" -f2)
+  - AMI_ID_SILVER_EXTERNAL=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_SILVER_EXTERNAL}.json | cut -d ":" -f2)
+  - echo ${AMI_ID_GOLDEN}
+  - echo ${AMI_ID_SILVER}
+  - echo ${AMI_ID_SILVER_EXTERNAL}
+  - chmod 755 ./scripts/parmscriptnonprod.sh
+  - ./scripts/parmscriptnonprod.sh
+
+.parm-store-change-prod: &parm_store_change_prod
+  script:
+  - ls
+  - pwd
+  - export AWS_DEFAULT_REGION=${REGION}
+  - export ACCOUNTS_NP_ARRAY=(${ACCOUNTS_NP})
+  - source ./assume-role.sh 
+  - AMI_ID_GOLDEN_PROD=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_GOLDEN_PROD}.json | cut -d ":" -f2)
+  - AMI_ID_SILVER_PROD=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_SILVER_PROD}.json | cut -d ":" -f2)
+  - AMI_ID_SILVER_EXTERNAL_PROD=$(jq -r '.builds[-1].artifact_id' packer_output_${AMI_TYPE_SILVER_EXTERNAL_PROD}.json | cut -d ":" -f2)
+  - echo ${AMI_ID_GOLDEN_PROD}
+  - echo ${AMI_ID_SILVER_PROD}
+  - echo ${AMI_ID_SILVER_EXTERNAL_PROD}
+  - chmod 755 ./scripts/parmscriptprod.sh
+  - ./scripts/parmscriptprod.sh
+
+validation:
+  stage: validate
+  tags:
+    - packer
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "nonprod"'
+  environment: validate_packer
+  <<: *validate_packer
+
+packer_build_nonprod:
+  stage: build
+  tags:
+    - packer
+  rules:
+    - if: '$build_switch_nonprod == "enabled"'
+    - if: '$CI_COMMIT_BRANCH == "nonprod"'
+      changes:
+        - templates/*
+        - variables/*
+        - scripts/*
+        - gi-files/*
+  environment: test_packer
+  variables:
+    AMI_TYPE_GOLDEN: "golden"
+    AMI_TYPE_SILVER: "silver"
+    AMI_TYPE_SILVER_EXTERNAL: "silver_external"
+  <<: *build_script_nonprod
+  artifacts:
+    untracked: true
+    paths:
+      - packer_output_golden.json
+      - packer_output_silver.json
+      - packer_output_silver_external.json
+    expire_in: 4 week
+    when: always
+
+packer_build_prod:
+  stage: build
+  tags:
+    - packer
+  rules:
+    - if: '$build_switch_prod == "enabled"'
+    - if: '$CI_COMMIT_BRANCH == "nonprod"'
+      changes:
+        - templates/*
+        - variables/*
+        - scripts/*
+        - gi-files/*
+  environment: test_packer
+  variables:
+    AMI_TYPE_GOLDEN_PROD: "golden_prod"
+    AMI_TYPE_SILVER_PROD: "silver_prod"
+    AMI_TYPE_SILVER_EXTERNAL_PROD: "silver_external_prod"
+  <<: *build_script_prod
+  artifacts:
+    untracked: true
+    paths:
+      - packer_output_golden_prod.json
+      - packer_output_silver_prod.json
+      - packer_output_silver_external_prod.json
+    expire_in: 4 week
+    when: always
+
+parm_store_nonprod:
+  stage: build
+  tags:
+    - packer
+  rules:
+    - if: '$parm_switch_nonprod == "enabled"'
+      when: manual
+  environment: parameter
+  variables:
+    AMI_TYPE_GOLDEN: "golden"
+    AMI_TYPE_SILVER: "silver"
+    AMI_TYPE_SILVER_EXTERNAL: "silver_external"
+  <<: *parm_store_change_nonprod
+
+parm_store_prod:
+  stage: build
+  tags:
+    - packer
+  rules:
+    - if: '$parm_switch_prod == "enabled"'
+      when: manual
+  environment: parameter
+  variables:
+    AMI_TYPE_GOLDEN: "golden"
+    AMI_TYPE_SILVER: "silver"
+    AMI_TYPE_SILVER_EXTERNAL: "silver_external"
+  <<: *parm_store_change_prod
+
+

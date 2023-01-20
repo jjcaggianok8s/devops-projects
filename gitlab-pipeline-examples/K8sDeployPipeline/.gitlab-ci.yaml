@@ -1,0 +1,135 @@
+include:
+  - project: 'domains/horizontal-services/central/eks-helm-deployment'
+    file: 'templates/eks-helm-deployment.yml'
+  - project: 'to-be-continuous/maven'
+    ref: '3.1.4'
+    file: '/templates/gitlab-ci-maven.yml'
+  - project: 'domains/horizontal-services/central/mend-sca'
+    file: 'templates/mend-gitlab-ci.yml'
+  - project: 'to-be-continuous/semantic-release'
+    ref: '3.0.0'
+    file: '/templates/gitlab-ci-semrel.yml'
+
+variables:
+  # Maven
+  IMAGENAME: 'docker.itp.example.cloud/intake:'
+  MAVEN_IMAGE: 'maven:3-eclipse-temurin-17'
+  MAVEN_DEPLOY_ENABLED: 'true'
+  VERSION: '0.1.0' #overridden by pom version
+  # Helm
+  HELM_VALUE_NAME: intake
+  HELM_NAMESPACE: 'underwriting'
+  HELM_REPO_USER: ${username}
+  HELM_REPO_PASSWORD: ${nexustoken}
+  HELM_CHART_DIR: './intake-app'
+  KUBE_NAMESPACE: 'underwriting'
+  HELM_BASE_APP_NAME: 'intake'
+  HELM_LINT_DISABLED: 'true'
+  SEMREL_TAG_FORMAT: 'intake-$${version}'
+  HELM_PUBLISH_URL: https://nexus.itp.example.cloud/repository/helm-releases/
+  HELM_PUBLISH_SNAPSHOT_URL: https://nexus.itp.example.cloud/repository/helm-snapshots/
+  HELM_REPO_PUBLISH_METHOD: 'POST'
+  # Semantic Release
+  SEMREL_INFO_ON: 'prod'
+  SEMREL_CHANGELOG_ENABLED: 'true'
+  SEMREL_CHANGELOG_FILE: 'CHANGELOG.md'
+  SEMREL_CHANGELOG_TITLE: '# Intake Changelog'
+  SEMREL_RELEASE_DISABLED: 'false'
+
+  JIB_BASE_ARGS: >-
+    -Djib.to.auth.username=deployment
+    -Djib.to.auth.password=${DEPLOY_PASS}
+  DOCKER_HOST: 'tcp://docker:2375'
+  DOCKER_TLS_CERTDIR: ''
+  DOCKER_DRIVER: overlay2
+
+  #Mend variables
+  WS_PRODUCTNAME: 'Underwriting TS'
+  WS_PROJECTNAME: 'Intake'
+  WS_FORCEUPDATE_FAILBUILDONPOLICYVIOLATION: 'false' #todo: remove this once vulns are remediated
+
+  #Sonar variables
+  SONAR_BASE_ARGS: >-
+    sonar:sonar
+    -Dsonar.host.url=${SONAR_URL}
+    -Dsonar.organization=kinsale
+    -Dsonar.projectKey=kinsale_submission-intake
+    -Dsonar.sources=src/main/java/
+    -Dsonar.language=java
+    -Dsonar.java.binaries=**/classes
+    -Dsonar.links.homepage=${CI_PROJECT_URL}
+    -Dsonar.links.ci=${CI_PROJECT_URL}/-/pipelines
+    -Dsonar.links.issue=${CI_PROJECT_URL}/-/issue
+
+## Maven and Docker Build
+mvn-snapshot:
+  stage: package-build
+
+mvn-build:
+  services:
+    - docker:dind
+
+prioritized-mend-job:
+  extends: .mvn-base
+  script:
+    - 'mvn $mvn_settings_opt verify -DskipTests'
+    - export WS_MAVEN_M2REPOSITORYPATH=$(mvn help:evaluate -Dexpression=settings.localRepository -q -DforceStdout)
+    - echo "Downloading WhiteSource Unified Agent"
+    - curl -LJO https://unified-agent.s3.amazonaws.com/wss-unified-agent.jar
+    - echo "WhiteSource Prioritized Scan"
+    - export ART_ID=$(mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout)
+    - export VER_ID=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+    - export WS_ARTIFACT=$ART_ID-$VER_ID.jar
+    - echo $WS_ARTIFACT
+    - mvn help:evaluate -Dexpression=project.version -q -DforceStdout
+    - java -jar ./wss-unified-agent.jar -appPath $CI_PROJECT_DIR/target/$WS_ARTIFACT -d /builds
+  stage: deploy-stage
+
+unified-mend-job:
+  stage: test
+  image: maven:3-eclipse-temurin-17
+  services:
+    - docker:dind
+  extends: .mvn-base
+  script:
+    - 'mvn $mvn_settings_opt verify -DskipTests'
+    - echo "Downloading WhiteSource Unified Agent"
+    - curl -LJO https://unified-agent.s3.amazonaws.com/wss-unified-agent.jar
+    - echo "WhiteSource Unified Scan"
+    - java -jar ./wss-unified-agent.jar
+
+docker-build-snapshot:
+  image: 'maven:3.8.4-eclipse-temurin-17'
+  extends: .mvn-base
+  stage: build
+  script:
+    - echo "registry=https://nexus.itp.kinsale.cloud/repository/kinsale-npm-registry/" >> ~/.npmrc
+    - chmod +x mvnw
+    - ./mvnw clean package $mvn_settings_opt -P !local,!consul jib:build ${JIB_BASE_ARGS} -Djib.to.image=kinsaledocker.itp.kinsale.cloud/${HELM_BASE_APP_NAME}/snapshot:${CI_COMMIT_SHORT_SHA}
+
+docker-build:
+  when: manual
+  image: 'maven:3.8.4-eclipse-temurin-17'
+  extends: .mvn-base
+  stage: build
+  script:
+    - chmod +x mvnw
+    - export VERSION=$(./mvnw --non-recursive help:evaluate -Dexpression=project.version -q -DforceStdout)
+    - ./mvnw clean package $mvn_settings_opt -P !local,!consul jib:build ${JIB_BASE_ARGS}
+
+#Stages
+stages:
+  - validation
+  - build
+  - test
+  - chart-validation
+  - package-build
+  - deploy
+  - deploy-qa
+  - stage-approval
+  - publish
+  - deploy-stage
+  - prod-approval
+  - production
+  - acceptance
+
